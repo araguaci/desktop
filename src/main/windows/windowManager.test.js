@@ -40,17 +40,13 @@ jest.mock('electron', () => ({
     },
 }));
 
-jest.mock('electron-log', () => ({
-    error: jest.fn(),
-    info: jest.fn(),
-}));
-
 jest.mock('common/config', () => ({}));
 
 jest.mock('common/utils/url', () => ({
     isTeamUrl: jest.fn(),
     isAdminUrl: jest.fn(),
     getView: jest.fn(),
+    cleanPathName: jest.fn(),
 }));
 jest.mock('common/tabs/TabView', () => ({
     getTabViewName: jest.fn(),
@@ -58,9 +54,13 @@ jest.mock('common/tabs/TabView', () => ({
 }));
 jest.mock('../utils', () => ({
     getAdjustedWindowBoundaries: jest.fn(),
+    shouldHaveBackBar: jest.fn(),
 }));
 jest.mock('../views/viewManager', () => ({
     ViewManager: jest.fn(),
+    LoadingScreenState: {
+        HIDDEN: 3,
+    },
 }));
 jest.mock('../CriticalErrorHandler', () => jest.fn());
 jest.mock('../views/teamDropdownView', () => jest.fn());
@@ -156,6 +156,7 @@ describe('main/windows/windowManager', () => {
         it('should create the main window and add listeners', () => {
             const window = {
                 on: jest.fn(),
+                once: jest.fn(),
             };
             createMainWindow.mockReturnValue(window);
             windowManager.showMainWindow();
@@ -166,6 +167,7 @@ describe('main/windows/windowManager', () => {
         it('should open deep link when provided', () => {
             const window = {
                 on: jest.fn(),
+                once: jest.fn(),
             };
             createMainWindow.mockReturnValue(window);
             windowManager.showMainWindow('mattermost://server-1.com/subpath');
@@ -204,6 +206,7 @@ describe('main/windows/windowManager', () => {
         });
 
         afterEach(() => {
+            jest.runAllTimers();
             jest.resetAllMocks();
         });
 
@@ -213,15 +216,131 @@ describe('main/windows/windowManager', () => {
             expect(windowManager.teamDropdown.updateWindowBounds).toHaveBeenCalled();
         });
 
-        it('should use getContentBounds when the platform is not linux', () => {
+        it('should use getSize when the platform is linux', () => {
             const originalPlatform = process.platform;
             Object.defineProperty(process, 'platform', {
-                value: 'win32',
+                value: 'linux',
             });
+
             windowManager.handleResizeMainWindow();
+
             Object.defineProperty(process, 'platform', {
                 value: originalPlatform,
             });
+
+            expect(view.setBounds).not.toHaveBeenCalled();
+            jest.runAllTimers();
+            expect(view.setBounds).toHaveBeenCalledWith({width: 1000, height: 900});
+        });
+    });
+
+    describe('handleWillResizeMainWindow', () => {
+        const windowManager = new WindowManager();
+        const view = {
+            setBounds: jest.fn(),
+            tab: {
+                url: 'http://server-1.com',
+            },
+            view: {
+                webContents: {
+                    getURL: jest.fn(),
+                },
+            },
+        };
+        windowManager.viewManager = {
+            getCurrentView: () => view,
+            setLoadingScreenBounds: jest.fn(),
+            loadingScreenState: 3,
+        };
+        windowManager.mainWindow = {
+            getContentBounds: () => ({width: 800, height: 600}),
+            getSize: () => [1000, 900],
+        };
+        windowManager.teamDropdown = {
+            updateWindowBounds: jest.fn(),
+        };
+
+        beforeEach(() => {
+            getAdjustedWindowBoundaries.mockImplementation((width, height) => ({width, height}));
+        });
+
+        afterEach(() => {
+            windowManager.isResizing = false;
+            jest.resetAllMocks();
+        });
+
+        it('should update loading screen and team dropdown bounds', () => {
+            const event = {preventDefault: jest.fn()};
+            windowManager.handleWillResizeMainWindow(event, {width: 800, height: 600});
+            expect(windowManager.viewManager.setLoadingScreenBounds).toHaveBeenCalled();
+            expect(windowManager.teamDropdown.updateWindowBounds).toHaveBeenCalled();
+        });
+
+        it('should not resize if the app is already resizing', () => {
+            windowManager.isResizing = true;
+            const event = {preventDefault: jest.fn()};
+            windowManager.handleWillResizeMainWindow(event, {width: 800, height: 600});
+            expect(view.setBounds).not.toHaveBeenCalled();
+        });
+
+        it('should use provided bounds', () => {
+            const event = {preventDefault: jest.fn()};
+            windowManager.handleWillResizeMainWindow(event, {width: 800, height: 600});
+            expect(windowManager.isResizing).toBe(true);
+            expect(view.setBounds).toHaveBeenCalledWith({width: 800, height: 600});
+        });
+    });
+
+    describe('handleResizedMainWindow', () => {
+        const windowManager = new WindowManager();
+        const view = {
+            setBounds: jest.fn(),
+            tab: {
+                url: 'http://server-1.com',
+            },
+            view: {
+                webContents: {
+                    getURL: jest.fn(),
+                },
+            },
+        };
+        windowManager.mainWindow = {
+            getContentBounds: () => ({width: 800, height: 600}),
+            getSize: () => [1000, 900],
+        };
+
+        beforeEach(() => {
+            getAdjustedWindowBoundaries.mockImplementation((width, height) => ({width, height}));
+        });
+
+        afterEach(() => {
+            windowManager.isResizing = true;
+            jest.resetAllMocks();
+        });
+
+        it('should not handle bounds if no window available', () => {
+            windowManager.handleResizedMainWindow();
+            expect(windowManager.isResizing).toBe(false);
+            expect(view.setBounds).not.toHaveBeenCalled();
+        });
+
+        it('should use getContentBounds when the platform is different to linux', () => {
+            windowManager.viewManager = {
+                getCurrentView: () => view,
+            };
+
+            const originalPlatform = process.platform;
+            Object.defineProperty(process, 'platform', {
+                value: 'windows',
+            });
+
+            windowManager.handleResizedMainWindow();
+
+            Object.defineProperty(process, 'platform', {
+                value: originalPlatform,
+            });
+
+            expect(windowManager.isResizing).toBe(false);
             expect(view.setBounds).toHaveBeenCalledWith({width: 800, height: 600});
         });
 
@@ -230,12 +349,14 @@ describe('main/windows/windowManager', () => {
             Object.defineProperty(process, 'platform', {
                 value: 'linux',
             });
-            windowManager.handleResizeMainWindow();
+
+            windowManager.handleResizedMainWindow();
+
             Object.defineProperty(process, 'platform', {
                 value: originalPlatform,
             });
-            expect(view.setBounds).not.toHaveBeenCalled();
-            jest.runAllTimers();
+
+            expect(windowManager.isResizing).toBe(false);
             expect(view.setBounds).toHaveBeenCalledWith({width: 1000, height: 900});
         });
     });
@@ -350,7 +471,6 @@ describe('main/windows/windowManager', () => {
                 value: originalPlatform,
             });
             expect(windowManager.mainWindow.flashFrame).toBeCalledWith(true);
-            expect(windowManager.settingsWindow.flashFrame).toBeCalledWith(true);
         });
 
         it('mac - should not bounce icon when config item is not set', () => {
@@ -773,6 +893,7 @@ describe('main/windows/windowManager', () => {
                     ],
                 },
             ];
+            urlUtils.cleanPathName.mockImplementation((base, path) => path);
         });
 
         afterEach(() => {
@@ -790,7 +911,6 @@ describe('main/windows/windowManager', () => {
 
             windowManager.handleBrowserHistoryPush(null, 'server-1_tab-messaging', '/other_type_2/subpath');
             expect(windowManager.viewManager.openClosedTab).toBeCalledWith('server-1_other_type_2', 'http://server-1.com/other_type_2/subpath');
-            expect(windowManager.viewManager.showByName).toBeCalledWith('server-1_other_type_2');
         });
 
         it('should open redirect view if different from current view', () => {

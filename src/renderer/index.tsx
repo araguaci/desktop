@@ -13,6 +13,7 @@ import {CombinedConfig, Team} from 'types/config';
 import {GET_CONFIGURATION, UPDATE_TEAMS, QUIT, RELOAD_CONFIGURATION} from 'common/communication';
 
 import MainPage from './components/MainPage';
+import IntlProvider from './intl_provider';
 
 type State = {
     config?: CombinedConfig;
@@ -98,7 +99,7 @@ class Root extends React.PureComponent<Record<string, never>, State> {
         try {
             const configRequest = await window.ipcRenderer.invoke(GET_CONFIGURATION);
             return configRequest;
-        } catch (err) {
+        } catch (err: any) {
             console.log(`there was an error with the config: ${err}`);
             if (exitOnError) {
                 window.ipcRenderer.send(QUIT, `unable to load configuration: ${err}`, err.stack);
@@ -120,15 +121,17 @@ class Root extends React.PureComponent<Record<string, never>, State> {
         }
 
         return (
-            <MainPage
-                teams={config.teams}
-                lastActiveTeam={config.lastActiveTeam}
-                moveTabs={this.moveTabs}
-                openMenu={this.openMenu}
-                darkMode={config.darkMode}
-                appName={config.appName}
-                useNativeWindow={config.useNativeWindow}
-            />
+            <IntlProvider>
+                <MainPage
+                    teams={config.teams}
+                    lastActiveTeam={config.lastActiveTeam}
+                    moveTabs={this.moveTabs}
+                    openMenu={this.openMenu}
+                    darkMode={config.darkMode}
+                    appName={config.appName}
+                    useNativeWindow={config.useNativeWindow}
+                />
+            </IntlProvider>
         );
     }
 }

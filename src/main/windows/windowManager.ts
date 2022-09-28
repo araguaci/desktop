@@ -3,7 +3,8 @@
 
 /* eslint-disable max-lines */
 import path from 'path';
-import {app, BrowserWindow, nativeImage, systemPreferences, ipcMain, IpcMainEvent, IpcMainInvokeEvent} from 'electron';
+
+import {app, BrowserWindow, nativeImage, systemPreferences, ipcMain, IpcMainEvent, IpcMainInvokeEvent, desktopCapturer} from 'electron';
 import log from 'electron-log';
 
 import {
@@ -22,14 +23,21 @@ import {
     RESIZE_MODAL,
     APP_LOGGED_OUT,
     BROWSER_HISTORY_BUTTON,
+    DISPATCH_GET_DESKTOP_SOURCES,
+    DESKTOP_SOURCES_RESULT,
+    RELOAD_CURRENT_VIEW,
+    VIEW_FINISHED_RESIZING,
 } from 'common/communication';
 import urlUtils from 'common/utils/url';
+import {SECOND} from 'common/utils/constants';
 import Config from 'common/config';
 import {getTabViewName, TAB_MESSAGING} from 'common/tabs/TabView';
 
-import {getAdjustedWindowBoundaries} from '../utils';
+import {MattermostView} from 'main/views/MattermostView';
 
-import {ViewManager} from '../views/viewManager';
+import {getAdjustedWindowBoundaries, shouldHaveBackBar} from '../utils';
+
+import {ViewManager, LoadingScreenState} from '../views/viewManager';
 import CriticalErrorHandler from '../CriticalErrorHandler';
 
 import TeamDropdownView from '../views/teamDropdownView';
@@ -43,12 +51,14 @@ export class WindowManager {
     assetsDir: string;
 
     mainWindow?: BrowserWindow;
+    mainWindowReady: boolean;
     settingsWindow?: BrowserWindow;
     viewManager?: ViewManager;
     teamDropdown?: TeamDropdownView;
     currentServerName?: string;
 
     constructor() {
+        this.mainWindowReady = false;
         this.assetsDir = path.resolve(app.getAppPath(), 'assets');
 
         ipcMain.on(HISTORY, this.handleHistory);
@@ -62,6 +72,9 @@ export class WindowManager {
         ipcMain.on(APP_LOGGED_OUT, this.handleAppLoggedOut);
         ipcMain.handle(GET_VIEW_NAME, this.handleGetViewName);
         ipcMain.handle(GET_VIEW_WEBCONTENTS_ID, this.handleGetWebContentsId);
+        ipcMain.on(DISPATCH_GET_DESKTOP_SOURCES, this.handleGetDesktopSources);
+        ipcMain.on(RELOAD_CURRENT_VIEW, this.handleReloadCurrentView);
+        ipcMain.on(VIEW_FINISHED_RESIZING, this.handleViewFinishedResizing);
     }
 
     handleUpdateConfig = () => {
@@ -71,6 +84,8 @@ export class WindowManager {
     }
 
     showSettingsWindow = () => {
+        log.debug('WindowManager.showSettingsWindow');
+
         if (this.settingsWindow) {
             this.settingsWindow.show();
         } else {
@@ -87,6 +102,8 @@ export class WindowManager {
     }
 
     showMainWindow = (deeplinkingURL?: string | URL) => {
+        log.debug('WindowManager.showMainWindow', deeplinkingURL);
+
         if (this.mainWindow) {
             if (this.mainWindow.isVisible()) {
                 this.mainWindow.focus();
@@ -94,6 +111,7 @@ export class WindowManager {
                 this.mainWindow.show();
             }
         } else {
+            this.mainWindowReady = false;
             this.mainWindow = createMainWindow({
                 linuxAppIcon: path.join(this.assetsDir, 'linux', 'app_icon.png'),
             });
@@ -104,10 +122,15 @@ export class WindowManager {
                 return;
             }
 
+            this.mainWindow.once('ready-to-show', () => {
+                this.mainWindowReady = true;
+            });
+
             // window handlers
             this.mainWindow.on('closed', () => {
                 log.warn('main window closed');
                 delete this.mainWindow;
+                this.mainWindowReady = false;
             });
             this.mainWindow.on('unresponsive', () => {
                 CriticalErrorHandler.setMainWindow(this.mainWindow!);
@@ -115,7 +138,11 @@ export class WindowManager {
             });
             this.mainWindow.on('maximize', this.handleMaximizeMainWindow);
             this.mainWindow.on('unmaximize', this.handleUnmaximizeMainWindow);
-            this.mainWindow.on('resize', this.handleResizeMainWindow);
+            if (process.platform !== 'darwin') {
+                this.mainWindow.on('resize', this.handleResizeMainWindow);
+            }
+            this.mainWindow.on('will-resize', this.handleWillResizeMainWindow);
+            this.mainWindow.on('resized', this.handleResizedMainWindow);
             this.mainWindow.on('focus', this.focusBrowserView);
             this.mainWindow.on('enter-full-screen', () => this.sendToRenderer('enter-full-screen'));
             this.mainWindow.on('leave-full-screen', () => this.sendToRenderer('leave-full-screen'));
@@ -154,49 +181,123 @@ export class WindowManager {
         this.sendToRenderer(MAXIMIZE_CHANGE, false);
     }
 
-    handleResizeMainWindow = () => {
+    isResizing = false;
+
+    handleWillResizeMainWindow = (event: Event, newBounds: Electron.Rectangle) => {
+        log.silly('WindowManager.handleWillResizeMainWindow');
+
         if (!(this.viewManager && this.mainWindow)) {
             return;
         }
-        const currentView = this.viewManager.getCurrentView();
-        let bounds: Partial<Electron.Rectangle>;
 
-        // Workaround for linux maximizing/minimizing, which doesn't work properly because of these bugs:
-        // https://github.com/electron/electron/issues/28699
-        // https://github.com/electron/electron/issues/28106
-        if (process.platform === 'linux') {
-            const size = this.mainWindow.getSize();
-            bounds = {width: size[0], height: size[1]};
-        } else {
-            bounds = this.mainWindow.getContentBounds();
+        if (this.isResizing && this.viewManager.loadingScreenState === LoadingScreenState.HIDDEN && this.viewManager.getCurrentView()) {
+            log.silly('prevented resize');
+            event.preventDefault();
+            return;
         }
 
-        const setBoundsFunction = () => {
-            if (currentView) {
-                currentView.setBounds(getAdjustedWindowBoundaries(bounds.width!, bounds.height!, !(urlUtils.isTeamUrl(currentView.tab.url, currentView.view.webContents.getURL()) || urlUtils.isAdminUrl(currentView.tab.url, currentView.view.webContents.getURL()))));
-            }
-        };
+        this.throttledWillResize(newBounds);
+        this.viewManager?.setLoadingScreenBounds();
+        this.teamDropdown?.updateWindowBounds();
+        ipcMain.emit(RESIZE_MODAL, null, newBounds);
+    }
 
-        // Another workaround since the window doesn't update properly under Linux for some reason
+    handleResizedMainWindow = () => {
+        log.silly('WindowManager.handleResizedMainWindow');
+
+        if (this.mainWindow) {
+            const bounds = this.getBounds();
+            this.throttledWillResize(bounds);
+            ipcMain.emit(RESIZE_MODAL, null, bounds);
+        }
+        this.isResizing = false;
+    }
+
+    handleViewFinishedResizing = () => {
+        this.isResizing = false;
+    }
+
+    private throttledWillResize = (newBounds: Electron.Rectangle) => {
+        this.isResizing = true;
+        this.setCurrentViewBounds(newBounds);
+    }
+
+    handleResizeMainWindow = () => {
+        log.silly('WindowManager.handleResizeMainWindow');
+
+        if (!(this.viewManager && this.mainWindow)) {
+            return;
+        }
+        if (this.isResizing) {
+            return;
+        }
+
+        const bounds = this.getBounds();
+
+        // Another workaround since the window doesn't update p roperly under Linux for some reason
         // See above comment
-        if (process.platform === 'linux') {
-            setTimeout(setBoundsFunction, 10);
-        } else {
-            setBoundsFunction();
-        }
+        setTimeout(this.setCurrentViewBounds, 10, bounds);
         this.viewManager.setLoadingScreenBounds();
         this.teamDropdown?.updateWindowBounds();
         ipcMain.emit(RESIZE_MODAL, null, bounds);
+    };
+
+    setCurrentViewBounds = (bounds: {width: number; height: number}) => {
+        const currentView = this.viewManager?.getCurrentView();
+        if (currentView) {
+            const adjustedBounds = getAdjustedWindowBoundaries(bounds.width, bounds.height, shouldHaveBackBar(currentView.tab.url, currentView.view.webContents.getURL()));
+            this.setBoundsFunction(currentView, adjustedBounds);
+        }
     }
 
-    sendToRenderer = (channel: string, ...args: any[]) => {
-        if (!this.mainWindow) {
-            this.showMainWindow();
+    private setBoundsFunction = (currentView: MattermostView, bounds: Electron.Rectangle) => {
+        log.silly('setBoundsFunction', bounds.width, bounds.height);
+        currentView.setBounds(bounds);
+    };
+
+    private getBounds = () => {
+        let bounds;
+
+        if (this.mainWindow) {
+            // Workaround for linux maximizing/minimizing, which doesn't work properly because of these bugs:
+            // https://github.com/electron/electron/issues/28699
+            // https://github.com/electron/electron/issues/28106
+            if (process.platform === 'linux') {
+                const size = this.mainWindow.getSize();
+                bounds = {width: size[0], height: size[1]};
+            } else {
+                bounds = this.mainWindow.getContentBounds();
+            }
+        }
+
+        return bounds as Electron.Rectangle;
+    }
+
+    // max retries allows the message to get to the renderer even if it is sent while the app is starting up.
+    sendToRendererWithRetry = (maxRetries: number, channel: string, ...args: any[]) => {
+        if (!this.mainWindow || !this.mainWindowReady) {
+            if (maxRetries > 0) {
+                log.info(`Can't send ${channel}, will retry`);
+                setTimeout(() => {
+                    this.sendToRendererWithRetry(maxRetries - 1, channel, ...args);
+                }, SECOND);
+            } else {
+                log.error(`Unable to send the message to the main window for message type ${channel}`);
+            }
+            return;
         }
         this.mainWindow!.webContents.send(channel, ...args);
         if (this.settingsWindow && this.settingsWindow.isVisible()) {
-            this.settingsWindow.webContents.send(channel, ...args);
+            try {
+                this.settingsWindow.webContents.send(channel, ...args);
+            } catch (e) {
+                log.error(`There was an error while trying to communicate with the renderer: ${e}`);
+            }
         }
+    }
+
+    sendToRenderer = (channel: string, ...args: any[]) => {
+        this.sendToRendererWithRetry(3, channel, ...args);
     }
 
     sendToAll = (channel: string, ...args: any[]) => {
@@ -241,10 +342,6 @@ export class WindowManager {
         if (process.platform === 'linux' || process.platform === 'win32') {
             if (Config.notifications.flashWindow) {
                 this.mainWindow?.flashFrame(flash);
-                if (this.settingsWindow) {
-                    // main might be hidden behind the settings
-                    this.settingsWindow.flashFrame(flash);
-                }
             }
         }
         if (process.platform === 'darwin' && Config.notifications.bounceIcon) {
@@ -318,6 +415,8 @@ export class WindowManager {
     }
 
     handleDoubleClick = (e: IpcMainEvent, windowType?: string) => {
+        log.debug('WindowManager.handleDoubleClick', windowType);
+
         let action = 'Maximize';
         if (process.platform === 'darwin') {
             action = systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string');
@@ -394,6 +493,8 @@ export class WindowManager {
     }
 
     focusBrowserView = () => {
+        log.debug('WindowManager.focusBrowserView');
+
         if (this.viewManager) {
             this.viewManager.focus();
         } else {
@@ -421,12 +522,16 @@ export class WindowManager {
     }
 
     handleReactAppInitialized = (e: IpcMainEvent, view: string) => {
+        log.debug('WindowManager.handleReactAppInitialized', view);
+
         if (this.viewManager) {
             this.viewManager.setServerInitialized(view);
         }
     }
 
     handleLoadingScreenAnimationFinished = () => {
+        log.debug('WindowManager.handleLoadingScreenAnimationFinished');
+
         if (this.viewManager) {
             this.viewManager.hideLoadingScreen();
         }
@@ -490,6 +595,8 @@ export class WindowManager {
     }
 
     handleHistory = (event: IpcMainEvent, offset: number) => {
+        log.debug('WindowManager.handleHistory', offset);
+
         if (this.viewManager) {
             const activeView = this.viewManager.getCurrentView();
             if (activeView && activeView.view.webContents.canGoToOffset(offset)) {
@@ -541,11 +648,15 @@ export class WindowManager {
     }
 
     handleBrowserHistoryPush = (e: IpcMainEvent, viewName: string, pathName: string) => {
+        log.debug('WwindowManager.handleBrowserHistoryPush', {viewName, pathName});
+
         const currentView = this.viewManager?.views.get(viewName);
-        const cleanedPathName = currentView?.tab.server.url.pathname === '/' ? pathName : pathName.replace(currentView?.tab.server.url.pathname || '', '');
+        const cleanedPathName = urlUtils.cleanPathName(currentView?.tab.server.url.pathname || '', pathName);
         const redirectedViewName = urlUtils.getView(`${currentView?.tab.server.url}${cleanedPathName}`, Config.teams)?.name || viewName;
         if (this.viewManager?.closedViews.has(redirectedViewName)) {
+            // If it's a closed view, just open it and stop
             this.viewManager.openClosedTab(redirectedViewName, `${currentView?.tab.server.url}${cleanedPathName}`);
+            return;
         }
         let redirectedView = this.viewManager?.views.get(redirectedViewName) || currentView;
         if (redirectedView !== currentView && redirectedView?.tab.server.name === this.currentServerName && redirectedView?.isLoggedIn) {
@@ -565,6 +676,8 @@ export class WindowManager {
     }
 
     handleBrowserHistoryButton = (e: IpcMainEvent, viewName: string) => {
+        log.debug('EindowManager.handleBrowserHistoryButton', viewName);
+
         const currentView = this.viewManager?.views.get(viewName);
         if (currentView) {
             if (currentView.view.webContents.getURL() === currentView.tab.url.toString()) {
@@ -582,16 +695,20 @@ export class WindowManager {
     }
 
     handleAppLoggedIn = (event: IpcMainEvent, viewName: string) => {
+        log.debug('WindowManager.handleAppLoggedIn', viewName);
+
         const view = this.viewManager?.views.get(viewName);
-        if (view) {
+        if (view && !view.isLoggedIn) {
             view.isLoggedIn = true;
             this.viewManager?.reloadViewIfNeeded(viewName);
         }
     }
 
     handleAppLoggedOut = (event: IpcMainEvent, viewName: string) => {
+        log.debug('WindowManager.handleAppLoggedOut', viewName);
+
         const view = this.viewManager?.views.get(viewName);
-        if (view) {
+        if (view && view.isLoggedIn) {
             view.isLoggedIn = false;
         }
     }
@@ -602,6 +719,36 @@ export class WindowManager {
 
     handleGetWebContentsId = (event: IpcMainInvokeEvent) => {
         return event.sender.id;
+    }
+
+    handleGetDesktopSources = async (event: IpcMainEvent, viewName: string, opts: Electron.SourcesOptions) => {
+        log.debug('WindowManager.handleGetDesktopSources', {viewName, opts});
+
+        const view = this.viewManager?.views.get(viewName);
+        if (!view) {
+            return;
+        }
+
+        desktopCapturer.getSources(opts).then((sources) => {
+            view.view.webContents.send(DESKTOP_SOURCES_RESULT, sources.map((source) => {
+                return {
+                    id: source.id,
+                    name: source.name,
+                    thumbnailURL: source.thumbnail.toDataURL(),
+                };
+            }));
+        });
+    }
+
+    handleReloadCurrentView = () => {
+        log.debug('WindowManager.handleReloadCurrentView');
+
+        const view = this.viewManager?.getCurrentView();
+        if (!view) {
+            return;
+        }
+        view?.reload();
+        this.viewManager?.showByName(view?.name);
     }
 }
 

@@ -34,6 +34,7 @@ describe('EditServerModal', function desc() {
         if (this.app) {
             await this.app.close();
         }
+        await env.clearElectronInstances();
     });
 
     let editServerView;
@@ -106,6 +107,18 @@ describe('EditServerModal', function desc() {
         await editServerView.type('#teamUrlInput', 'superInvalid url');
         await editServerView.click('#saveNewServerModal');
         const existing = await editServerView.isVisible('#teamUrlInput.is-invalid');
+        existing.should.be.true;
+    });
+
+    it('should not edit team if another server with the same name or URL exists', async () => {
+        await editServerView.fill('#teamNameInput', config.teams[1].name);
+        await editServerView.click('#saveNewServerModal');
+        let existing = await editServerView.isVisible('#teamNameInput.is-invalid');
+        existing.should.be.true;
+
+        await editServerView.fill('#teamNameInput', 'NewTestTeam');
+        await editServerView.fill('#teamUrlInput', config.teams[1].url);
+        existing = await editServerView.isVisible('#teamUrlInput.is-invalid');
         existing.should.be.true;
     });
 
@@ -221,8 +234,7 @@ describe('EditServerModal', function desc() {
         });
     });
 
-    // TODO: disabling flaky test
-    it.skip('MM-T4391_4 should edit team when Save is pressed and both edited', async () => {
+    it('MM-T4391_4 should edit team when Save is pressed and both edited', async () => {
         await editServerView.fill('#teamNameInput', 'NewTestTeam');
         await editServerView.fill('#teamUrlInput', 'http://google.com');
         await editServerView.click('#saveNewServerModal');

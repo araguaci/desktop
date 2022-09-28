@@ -6,9 +6,7 @@
 /* eslint-disable import/no-commonjs */
 'use strict';
 
-const path = require('path');
-
-const merge = require('webpack-merge');
+const {merge} = require('webpack-merge');
 
 const CopyPlugin = require('copy-webpack-plugin');
 
@@ -24,9 +22,9 @@ module.exports = merge(base, {
         loadingScreenPreload: './src/main/preload/loadingScreenPreload.js',
         urlView: './src/main/preload/urlView.js',
     },
-    output: {
-        path: path.join(__dirname, 'dist/'),
-        filename: '[name].js',
+    externals: {
+        'macos-notification-state': 'require("macos-notification-state")',
+        'windows-focus-assist': 'require("windows-focus-assist")',
     },
     module: {
         rules: [{
@@ -39,17 +37,11 @@ module.exports = merge(base, {
             },
         }, {
             test: /\.mp3$/,
-            use: {
-                loader: 'url-loader',
-            },
+            type: 'asset/inline',
         },
         {
             test: /\.node$/,
-            loader: 'awesome-node-loader',
-            options: {
-                name: '[name].[ext]',
-                rewritePath: path.resolve(__dirname, 'dist'),
-            },
+            loader: 'node-loader',
         }],
     },
     plugins: [

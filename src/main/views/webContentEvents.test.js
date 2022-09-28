@@ -27,14 +27,13 @@ jest.mock('electron', () => ({
     })),
 }));
 
-jest.mock('electron-log', () => ({
-    info: jest.fn(),
-    warn: jest.fn(),
-}));
-
 jest.mock('../allowProtocolDialog', () => ({}));
 jest.mock('../windows/windowManager', () => ({
     showMainWindow: jest.fn(),
+}));
+
+jest.mock('common/config', () => ({
+    spellcheck: true,
 }));
 
 jest.mock('common/utils/url', () => ({

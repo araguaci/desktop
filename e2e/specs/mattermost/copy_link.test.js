@@ -28,6 +28,7 @@ describe('copylink', function desc() {
         if (this.app) {
             await this.app.close();
         }
+        await env.clearElectronInstances();
     });
 
     it('MM-T125 Copy Link can be used from channel LHS', async () => {
@@ -44,6 +45,6 @@ describe('copylink', function desc() {
         const clipboardText = clipboard.readText();
         await firstServer.fill('#post_textbox', clipboardText);
         const content = await firstServer.locator('#post_textbox').textContent();
-        content.should.be.equal('/ad-1/channels/suscipit-4');
+        content.should.contain('/ad-1/channels/suscipit-4');
     });
 });

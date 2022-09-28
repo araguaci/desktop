@@ -12,6 +12,8 @@ import {ModalMessage} from 'types/modals';
 
 import {MODAL_CANCEL, MODAL_INFO, MODAL_RESULT, RETRIEVE_MODAL_INFO} from 'common/communication';
 
+import IntlProvider from 'renderer/intl_provider';
+
 import NewTeamModal from '../../components/NewTeamModal'; //'./addServer.jsx';
 
 import setupDarkMode from '../darkMode';
@@ -28,11 +30,13 @@ const onSave = (data: TeamWithIndex) => {
 
 const EditServerModalWrapper: React.FC = () => {
     const [server, setServer] = useState<TeamWithIndex>();
+    const [currentTeams, setCurrentTeams] = useState<TeamWithIndex[]>();
 
-    const handleEditServerMessage = (event: {data: ModalMessage<TeamWithIndex>}) => {
+    const handleEditServerMessage = (event: {data: ModalMessage<{currentTeams: TeamWithIndex[]; team: TeamWithIndex}>}) => {
         switch (event.data.type) {
         case MODAL_INFO: {
-            setServer(event.data.data);
+            setServer(event.data.data.team);
+            setCurrentTeams(event.data.data.currentTeams);
             break;
         }
         default:
@@ -46,13 +50,16 @@ const EditServerModalWrapper: React.FC = () => {
     }, []);
 
     return (
-        <NewTeamModal
-            onClose={onClose}
-            onSave={onSave}
-            editMode={true}
-            show={Boolean(server)}
-            team={server}
-        />
+        <IntlProvider>
+            <NewTeamModal
+                onClose={onClose}
+                onSave={onSave}
+                editMode={true}
+                show={Boolean(server)}
+                team={server}
+                currentTeams={currentTeams}
+            />
+        </IntlProvider>
     );
 };
 

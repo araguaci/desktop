@@ -6,6 +6,7 @@ import log from 'electron-log';
 
 import {TeamWithTabs} from 'types/config';
 
+import Config from 'common/config';
 import urlUtils from 'common/utils/url';
 
 import ContextMenu from 'main/contextMenu';
@@ -47,6 +48,8 @@ export class WebContentsEventManager {
 
     generateWillNavigate = (getServersFunction: () => TeamWithTabs[]) => {
         return (event: Event & {sender: WebContents}, url: string) => {
+            log.debug('webContentEvents.will-navigate', {webContentsId: event.sender.id, url});
+
             const contentID = event.sender.id;
             const parsedURL = urlUtils.parseURL(url)!;
             const configServers = getServersFunction();
@@ -77,6 +80,8 @@ export class WebContentsEventManager {
 
     generateDidStartNavigation = (getServersFunction: () => TeamWithTabs[]) => {
         return (event: Event & {sender: WebContents}, url: string) => {
+            log.debug('webContentEvents.did-start-navigation', {webContentsId: event.sender.id, url});
+
             const serverList = getServersFunction();
             const contentID = event.sender.id;
             const parsedURL = urlUtils.parseURL(url)!;
@@ -103,6 +108,8 @@ export class WebContentsEventManager {
 
     generateNewWindowListener = (getServersFunction: () => TeamWithTabs[], spellcheck?: boolean) => {
         return (details: Electron.HandlerDetails): {action: 'deny' | 'allow'} => {
+            log.debug('webContentEvents.new-window', details.url);
+
             const parsedURL = urlUtils.parseURL(details.url);
             if (!parsedURL) {
                 log.warn(`Ignoring non-url ${details.url}`);
@@ -179,7 +186,6 @@ export class WebContentsEventManager {
                         show: false,
                         center: true,
                         webPreferences: {
-                            nativeWindowOpen: true,
                             spellcheck: (typeof spellcheck === 'undefined' ? true : spellcheck),
                         },
                     });
@@ -216,9 +222,31 @@ export class WebContentsEventManager {
         }
     };
 
-    addWebContentsEventListeners = (mmview: MattermostView, getServersFunction: () => TeamWithTabs[]) => {
-        const contents = mmview.view.webContents;
+    addMattermostViewEventListeners = (mmview: MattermostView, getServersFunction: () => TeamWithTabs[]) => {
+        this.addWebContentsEventListeners(
+            mmview.view.webContents,
+            getServersFunction,
+            (contents: WebContents) => {
+                contents.on('page-title-updated', mmview.handleTitleUpdate);
+                contents.on('page-favicon-updated', mmview.handleFaviconUpdate);
+                contents.on('update-target-url', mmview.handleUpdateTarget);
+                contents.on('did-navigate', mmview.handleDidNavigate);
+            },
+            (contents: WebContents) => {
+                contents.removeListener('page-title-updated', mmview.handleTitleUpdate);
+                contents.removeListener('page-favicon-updated', mmview.handleFaviconUpdate);
+                contents.removeListener('update-target-url', mmview.handleUpdateTarget);
+                contents.removeListener('did-navigate', mmview.handleDidNavigate);
+            },
+        );
+    };
 
+    addWebContentsEventListeners = (
+        contents: WebContents,
+        getServersFunction: () => TeamWithTabs[],
+        addListeners?: (contents: WebContents) => void,
+        removeListeners?: (contents: WebContents) => void,
+    ) => {
         // initialize custom login tracking
         this.customLogins[contents.id] = {
             inProgress: false,
@@ -239,34 +267,28 @@ export class WebContentsEventManager {
         const didStartNavigation = this.generateDidStartNavigation(getServersFunction);
         contents.on('did-start-navigation', didStartNavigation as (e: Event, u: string) => void);
 
-        const spellcheck = mmview.options.webPreferences?.spellcheck;
+        const spellcheck = Config.useSpellChecker;
         const newWindow = this.generateNewWindowListener(getServersFunction, spellcheck);
         contents.setWindowOpenHandler(newWindow);
 
-        contents.on('page-title-updated', mmview.handleTitleUpdate);
-        contents.on('page-favicon-updated', mmview.handleFaviconUpdate);
-        contents.on('update-target-url', mmview.handleUpdateTarget);
-        contents.on('did-navigate', mmview.handleDidNavigate);
+        addListeners?.(contents);
 
-        const removeListeners = () => {
+        const removeWebContentsListeners = () => {
             try {
                 contents.removeListener('will-navigate', willNavigate as (e: Event, u: string) => void);
                 contents.removeListener('did-start-navigation', didStartNavigation as (e: Event, u: string) => void);
-                contents.removeListener('page-title-updated', mmview.handleTitleUpdate);
-                contents.removeListener('page-favicon-updated', mmview.handleFaviconUpdate);
-                contents.removeListener('update-target-url', mmview.handleUpdateTarget);
-                contents.removeListener('did-navigate', mmview.handleDidNavigate);
+                removeListeners?.(contents);
             } catch (e) {
                 log.error(`Error while trying to detach listeners, this might be ok if the process crashed: ${e}`);
             }
         };
 
-        this.listeners[contents.id] = removeListeners;
+        this.listeners[contents.id] = removeWebContentsListeners;
         contents.once('render-process-gone', (event, details) => {
             if (details.reason !== 'clean-exit') {
                 log.error('Renderer process for a webcontent is no longer available:', details.reason);
             }
-            removeListeners();
+            removeWebContentsListeners();
         });
     };
 }

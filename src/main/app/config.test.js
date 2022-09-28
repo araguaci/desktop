@@ -7,12 +7,15 @@ import {RELOAD_CONFIGURATION} from 'common/communication';
 import Config from 'common/config';
 
 import {handleConfigUpdate} from 'main/app/config';
-import {addNewServerModalWhenMainWindowIsShown} from 'main/app/intercom';
+import {handleMainWindowIsShown} from 'main/app/intercom';
+import {setLoggingLevel} from 'main/app/utils';
+
 import WindowManager from 'main/windows/windowManager';
 import AutoLauncher from 'main/AutoLauncher';
 
 jest.mock('electron', () => ({
     app: {
+        getAppPath: () => '/path/to/app',
         isReady: jest.fn(),
         setPath: jest.fn(),
     },
@@ -21,18 +24,15 @@ jest.mock('electron', () => ({
         on: jest.fn(),
     },
 }));
-jest.mock('electron-log', () => ({
-    info: jest.fn(),
-    error: jest.fn(),
-}));
 
 jest.mock('main/app/utils', () => ({
     handleUpdateMenuEvent: jest.fn(),
     updateSpellCheckerLocales: jest.fn(),
     updateServerInfos: jest.fn(),
+    setLoggingLevel: jest.fn(),
 }));
 jest.mock('main/app/intercom', () => ({
-    addNewServerModalWhenMainWindowIsShown: jest.fn(),
+    handleMainWindowIsShown: jest.fn(),
 }));
 jest.mock('main/AutoLauncher', () => ({
     enable: jest.fn(),
@@ -98,11 +98,18 @@ describe('main/app/config', () => {
             Config.registryConfigData = {};
 
             handleConfigUpdate({teams: []});
-            expect(addNewServerModalWhenMainWindowIsShown).toHaveBeenCalled();
+            expect(handleMainWindowIsShown).toHaveBeenCalled();
 
             Object.defineProperty(process, 'platform', {
                 value: originalPlatform,
             });
+        });
+
+        it('should set logging level correctly', () => {
+            handleConfigUpdate({logLevel: 'info'});
+            expect(setLoggingLevel).toBeCalledWith('info');
+            handleConfigUpdate({logLevel: 'debug'});
+            expect(setLoggingLevel).toBeCalledWith('debug');
         });
     });
 });

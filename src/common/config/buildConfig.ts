@@ -18,6 +18,7 @@ import {BuildConfig} from 'types/config';
  *                                          Specify at least one server for "defaultTeams"
  *                                          when "enableServerManagement is set to false
  * @prop {[]} managedResources - Defines which paths are managed
+ * @prop {[]} allowedProtocols - Defines which protocols should be automatically allowed
  */
 const buildConfig: BuildConfig = {
     defaultTeams: [/*
@@ -26,10 +27,16 @@ const buildConfig: BuildConfig = {
       url: 'https://example.com'
     }
   */],
-    helpLink: 'https://about.mattermost.com/default-desktop-app-documentation/',
+    helpLink: 'https://docs.mattermost.com/messaging/managing-desktop-app-servers.html',
     enableServerManagement: true,
     enableAutoUpdater: true,
     managedResources: ['trusted'],
+    allowedProtocols: [
+        'mattermost',
+        'ftp',
+        'mailto',
+        'tel',
+    ],
 };
 
 export default buildConfig;

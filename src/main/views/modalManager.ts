@@ -4,6 +4,8 @@
 import {BrowserWindow, ipcMain} from 'electron';
 import {IpcMainEvent, IpcMainInvokeEvent} from 'electron/main';
 
+import log from 'electron-log';
+
 import {CombinedConfig} from 'types/config';
 
 import {
@@ -17,8 +19,10 @@ import {
     GET_MODAL_UNCLOSEABLE,
     RESIZE_MODAL,
 } from 'common/communication';
+import Config from 'common/config';
 
 import {getAdjustedWindowBoundaries} from 'main/utils';
+import WebContentsEventManager from 'main/views/webContentEvents';
 import WindowManager from 'main/windows/windowManager';
 
 import {ModalView} from './modalView';
@@ -70,6 +74,8 @@ export class ModalManager {
     }
 
     handleInfoRequest = (event: IpcMainInvokeEvent) => {
+        log.debug('ModalManager.handleInfoRequest');
+
         const requestModal = this.findModalByCaller(event);
         if (requestModal) {
             return requestModal.handleInfoRequest();
@@ -83,6 +89,7 @@ export class ModalManager {
             if (index === 0) {
                 WindowManager.sendToRenderer(MODAL_OPEN);
                 modal.show(undefined, Boolean(withDevTools));
+                WebContentsEventManager.addWebContentsEventListeners(modal.view.webContents, () => Config.teams.concat());
             } else {
                 WindowManager.sendToRenderer(MODAL_CLOSE);
                 modal.hide();
@@ -91,6 +98,8 @@ export class ModalManager {
     }
 
     handleModalFinished = (mode: 'resolve' | 'reject', event: IpcMainEvent, data: unknown) => {
+        log.debug('ModalManager.handleModalFinished', {mode, data});
+
         const requestModal = this.findModalByCaller(event);
         if (requestModal) {
             if (mode === 'resolve') {
@@ -122,6 +131,8 @@ export class ModalManager {
     }
 
     handleResizeModal = (event: IpcMainEvent, bounds: Electron.Rectangle) => {
+        log.debug('ModalManager.handleResizeModal', bounds);
+
         if (this.modalQueue.length) {
             const currentModal = this.modalQueue[0];
             currentModal.view.setBounds(getAdjustedWindowBoundaries(bounds.width, bounds.height));
@@ -135,6 +146,10 @@ export class ModalManager {
     }
 
     handleEmitConfiguration = (event: IpcMainEvent, config: CombinedConfig) => {
+        if (this.modalQueue.length) {
+            log.debug('ModalManager.handleEmitConfiguration');
+        }
+
         this.modalQueue.forEach((modal) => {
             modal.view.webContents.send(DARK_MODE_CHANGE, config.darkMode);
         });

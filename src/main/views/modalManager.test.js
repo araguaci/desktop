@@ -15,7 +15,13 @@ jest.mock('electron', () => ({
     },
 }));
 
-jest.mock('electron-log', () => ({}));
+jest.mock('common/config', () => ({
+    teams: [],
+}));
+
+jest.mock('main/views/webContentEvents', () => ({
+    addWebContentsEventListeners: jest.fn(),
+}));
 
 jest.mock('./modalView', () => ({
     ModalView: jest.fn(),

@@ -13,7 +13,10 @@ jest.mock('electron', () => ({
 }));
 
 jest.mock('electron-is-dev', () => false);
-jest.mock('electron-log', () => ({}));
+
+jest.mock('main/i18nManager', () => ({
+    localizeMessage: jest.fn(),
+}));
 
 describe('main/AutoLauncher', () => {
     let autoLauncher;

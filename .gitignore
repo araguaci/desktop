@@ -4,12 +4,13 @@ Thumbs.db
 
 node_modules/
 *_bundle.js
-release/
+release*/
 npm-debug.log*
 
 build/
 coverage/
 dist/
+mochawesome-report/
 
 test-results.xml
 test_config.json
@@ -17,3 +18,8 @@ test_config.json
 testUserData
 
 .gitattributes
+
+fastlane/README.md
+fastlane/report.xml
+
+*.provisionprofile

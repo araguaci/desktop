@@ -2,7 +2,7 @@
 // See LICENSE.txt for license information.
 
 import {app, ipcMain} from 'electron';
-import log from 'electron-log';
+import log, {LogLevel} from 'electron-log';
 
 import {CombinedConfig} from 'types/config';
 
@@ -14,8 +14,8 @@ import {setUnreadBadgeSetting} from 'main/badge';
 import {refreshTrayImages} from 'main/tray/tray';
 import WindowManager from 'main/windows/windowManager';
 
-import {addNewServerModalWhenMainWindowIsShown} from './intercom';
-import {handleUpdateMenuEvent, updateServerInfos, updateSpellCheckerLocales} from './utils';
+import {handleMainWindowIsShown} from './intercom';
+import {handleUpdateMenuEvent, setLoggingLevel, updateServerInfos, updateSpellCheckerLocales} from './utils';
 
 let didCheckForAddServerModal = false;
 
@@ -24,6 +24,9 @@ let didCheckForAddServerModal = false;
 //
 
 export function handleConfigUpdate(newConfig: CombinedConfig) {
+    log.debug('App.Config.handleConfigUpdate');
+    log.silly('App.Config.handleConfigUpdate', newConfig);
+
     if (!newConfig) {
         return;
     }
@@ -58,15 +61,20 @@ export function handleConfigUpdate(newConfig: CombinedConfig) {
         updateServerInfos(newConfig.teams);
         WindowManager.initializeCurrentServerName();
         if (newConfig.teams.length === 0) {
-            addNewServerModalWhenMainWindowIsShown();
+            handleMainWindowIsShown();
         }
     }
+
+    log.info('Log level set to:', newConfig.logLevel);
+    setLoggingLevel(newConfig.logLevel as LogLevel);
 
     handleUpdateMenuEvent();
     ipcMain.emit(EMIT_CONFIGURATION, true, newConfig);
 }
 
 export function handleDarkModeChange(darkMode: boolean) {
+    log.debug('App.Config.handleDarkModeChange', darkMode);
+
     refreshTrayImages(Config.trayIconTheme);
     WindowManager.sendToRenderer(DARK_MODE_CHANGE, darkMode);
     WindowManager.updateLoadingScreenDarkMode(darkMode);

@@ -28,16 +28,16 @@ jest.mock('electron', () => ({
     },
 }));
 
-jest.mock('electron-log', () => ({
-    error: jest.fn(),
-}));
-
 jest.mock('fs', () => ({
     writeFileSync: jest.fn(),
 }));
 
 jest.mock('child_process', () => ({
     spawn: jest.fn(),
+}));
+
+jest.mock('main/i18nManager', () => ({
+    localizeMessage: jest.fn(),
 }));
 
 describe('main/CriticalErrorHandler', () => {

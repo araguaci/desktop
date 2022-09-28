@@ -20,16 +20,18 @@ jest.mock('electron', () => ({
     },
 }));
 
-jest.mock('electron-log', () => ({
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+jest.mock('common/config', () => ({
+    teams: [{
+        name: 'test-team',
+        url: 'http://server-1.com',
+    }],
 }));
 
 jest.mock('main/app/utils', () => ({
     getDeeplinkingURL: jest.fn(),
     openDeepLink: jest.fn(),
 }));
+jest.mock('main/autoUpdater', () => ({}));
 
 jest.mock('main/certificateStore', () => ({
     isExplicitlyUntrusted: jest.fn(),
@@ -38,9 +40,17 @@ jest.mock('main/certificateStore', () => ({
     add: jest.fn(),
     save: jest.fn(),
 }));
+jest.mock('main/i18nManager', () => ({
+    localizeMessage: jest.fn(),
+}));
 jest.mock('main/tray/tray', () => ({}));
 jest.mock('main/windows/windowManager', () => ({
     getMainWindow: jest.fn(),
+    getViewNameByWebContentsId: jest.fn(),
+    getServerNameByWebContentsId: jest.fn(),
+    viewManager: {
+        views: new Map(),
+    },
 }));
 
 describe('main/app/app', () => {
@@ -58,6 +68,7 @@ describe('main/app/app', () => {
         });
 
         afterEach(() => {
+            WindowManager.viewManager.views.clear();
             jest.resetAllMocks();
         });
 
@@ -93,6 +104,7 @@ describe('main/app/app', () => {
 
         beforeEach(() => {
             WindowManager.getMainWindow.mockReturnValue(mainWindow);
+            WindowManager.getServerNameByWebContentsId.mockReturnValue('test-team');
         });
 
         afterEach(() => {
@@ -114,6 +126,11 @@ describe('main/app/app', () => {
             handleAppCertificateError(event, webContents, testURL, 'error-1', certificate, callback);
             expect(event.preventDefault).toHaveBeenCalled();
             expect(callback).toHaveBeenCalledWith(true);
+        });
+
+        it('should ignore and untrust when the origin of the certificate does not match the server URL', () => {
+            handleAppCertificateError(event, webContents, 'http://a-different-url.com', 'error-1', certificate, callback);
+            expect(callback).toHaveBeenCalledWith(false);
         });
 
         it('should not show additional dialogs if certificate error has already been logged', () => {
@@ -142,6 +159,16 @@ describe('main/app/app', () => {
             expect(certificateErrorCallbacks.has('http://server-1.com:error-1')).toBe(false);
             expect(CertificateStore.add).toHaveBeenCalledWith('http://server-1.com', certificate);
             expect(CertificateStore.save).toHaveBeenCalled();
+        });
+
+        it('should load URL using MattermostView when trusting certificate', async () => {
+            dialog.showMessageBox.mockResolvedValue({response: 0});
+            const load = jest.fn();
+            WindowManager.viewManager.views.set('view-name', {load});
+            WindowManager.getViewNameByWebContentsId.mockReturnValue('view-name');
+            await handleAppCertificateError(event, webContents, testURL, 'error-1', certificate, callback);
+            expect(callback).toHaveBeenCalledWith(true);
+            expect(load).toHaveBeenCalledWith(testURL);
         });
 
         it('should explicitly untrust if user selects More Details and then cancel with the checkbox checked', async () => {
